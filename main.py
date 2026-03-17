@@ -66,7 +66,7 @@ def send_discord(message):
     # 디스코드 봇 프로필 설정 (선택 사항)
     payload = {
         "username": "아침별점 요정",
-        "avatar_url": "https://www.asahi.co.jp/common/images/abc_logo.png",
+        "avatar_url": "https://pbs.twimg.com/card_img/2031288293040525312/XqIwveUV?format=jpg&name=360x360",
         "content": message
     }
     requests.post(webhook_url, json=payload)
