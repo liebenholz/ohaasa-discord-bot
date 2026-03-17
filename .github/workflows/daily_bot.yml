@@ -1,0 +1,32 @@
+name: Ohaasa Daily Bot
+
+on:
+  schedule:
+    # 한국 시간 기준 매일 오전 6시 30분 실행 (UTC 기준 21시 30분)
+    - cron: '30 21 * * *'
+  workflow_dispatch: # 수동으로 실행해볼 수 있는 버튼
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install playwright beautifulsoup4 requests
+          
+      - name: Install Playwright Browsers
+        run: |
+          playwright install chromium
+
+      - name: Execute Script
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: python main.py
