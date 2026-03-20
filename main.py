@@ -1,76 +1,116 @@
-from playwright.sync_api import sync_playwright
-from bs4 import BeautifulSoup
-import requests
 import os
+import requests
+import re
+from datetime import datetime
+import pytz
+from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 
-# 별자리 영문-한글 매핑 테이블
+# 1. 별자리 매핑 테이블 (평일 클래스명 & 주말 ID명 통합)
 SIGN_MAP = {
-    "aries": "양자리", "taurus": "황소자리", "gemini": "쌍둥이자리",
-    "cancer": "게자리", "leo": "사자자리", "virgo": "처녀자리",
-    "libra": "천칭자리", "scorpio": "전갈자리", "sagittarius": "사수자리",
-    "capricorn": "염소자리", "aquarius": "물병자리", "pisces": "물고기자리"
+    "aries": "양자리", "ohitsuji": "양자리",
+    "taurus": "황소자리", "ousi": "황소자리",
+    "gemini": "쌍둥이자리", "futago": "쌍둥이자리",
+    "cancer": "게자리", "kani": "게자리",
+    "leo": "사자자리", "sisi": "사자자리",
+    "virgo": "처녀자리", "otome": "처녀자리",
+    "libra": "천칭자리", "tenbin": "천칭자리",
+    "scorpio": "전갈자리", "sasori": "전갈자리",
+    "sagittarius": "사수자리", "ite": "사수자리",
+    "capricorn": "염소자리", "yagi": "염소자리",
+    "aquarius": "물병자리", "mizugame": "물병자리",
+    "pisces": "물고기자리", "uo": "물고기자리"
 }
 
-def get_ohaasa_ranking():
+def get_weekday_ranking(page):
+    """[평일] 오하아사(asahi.co.jp) 크롤링"""
     url = "https://www.asahi.co.jp/ohaasa/week/horoscope/"
+    page.goto(url, wait_until="domcontentloaded")
+    page.wait_for_selector('ul.oa_horoscope_list li', timeout=15000)
     
-    try:
-        with sync_playwright() as p:
-            # GitHub Actions 서버 환경을 위한 브라우저 설정
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            
-            page.goto(url)
-            page.wait_for_selector('ul.oa_horoscope_list li', timeout=15000) # 서버 환경을 고려해 15초로 여유 있게 설정
-            
-            html = page.content()
-            browser.close()
+    soup = BeautifulSoup(page.content(), 'html.parser')
+    items = soup.select('ul.oa_horoscope_list li')
+    
+    results = []
+    for index, item in enumerate(items, start=1):
+        classes = item.get('class', [])
+        sign_key = next((c for c in classes if c in SIGN_MAP), "unknown")
+        results.append({"rank": index, "sign": SIGN_MAP.get(sign_key, sign_key)})
+    
+    return "✨ **[평일] 오늘의 오하아사 별자리 순위** ✨", results
 
-        soup = BeautifulSoup(html, 'html.parser')
-        horoscope_ul = soup.select_one('ul.oa_horoscope_list')
+def get_weekend_ranking(page):
+    """[주말] 굿모닝 우라나이(tv-asahi.co.jp) 크롤링"""
+    url = "https://www.tv-asahi.co.jp/goodmorning/uranai/"
+    page.goto(url, wait_until="networkidle")
+    page.wait_for_selector('.seiza-area', timeout=15000)
+    
+    soup = BeautifulSoup(page.content(), 'html.parser')
+    boxes = soup.select('.seiza-box')
+    
+    results = []
+    for box in boxes:
+        box_id = box.get('id', '')
+        korean_sign = SIGN_MAP.get(box_id, box_id)
         
-        if not horoscope_ul:
-            return "❌ 데이터를 찾지 못했습니다. 사이트 구조가 변경되었을 수 있습니다."
-
-        items = horoscope_ul.select('li')
-        msg_lines = ["✨ **오늘의 오하아사 별자리 순위** ✨\n"]
+        # 순위 텍스트(예: 1位)에서 숫자만 추출
+        rank_text = box.get_text(separator=' ', strip=True)
+        rank_match = re.search(r'(\d+)位', rank_text)
         
-        for index, item in enumerate(items, start=1):
-            classes = item.get('class', [])
-            english_sign = next((c for c in classes if c in SIGN_MAP), "unknown")
-            korean_sign = SIGN_MAP.get(english_sign, english_sign)
+        if rank_match:
+            rank_val = int(rank_match.group(1))
+            results.append({"rank": rank_val, "sign": korean_sign})
             
-            # 4위부터 12위까지도 정상적으로 순위가 매겨지도록 index 활용
-            rank_val = index
-            rank_text = f"{rank_val}위"
-            
-            if rank_val == 1: emoji = "🥇"
-            elif rank_val == 2: emoji = "🥈"
-            elif rank_val == 3: emoji = "🥉"
-            else: emoji = "🔹"
-            
-            msg_lines.append(f"{emoji} **{rank_text}**: {korean_sign}")
-            
-        return "\n".join(msg_lines)
+    results.sort(key=lambda x: x['rank'])
+    return "☀️ **[주말] 고고 호로스코프 순위** ☀️", results
 
-    except Exception as e:
-        return f"❌ 크롤링 중 에러 발생: {e}"
-
-def send_discord(message):
+def send_discord(title, results):
     webhook_url = os.environ.get('DISCORD_WEBHOOK')
-    if not webhook_url:
-        print("Webhook URL이 설정되지 않았습니다. 결과만 출력합니다.")
-        print(message)
-        return
     
-    # 디스코드 봇 프로필 설정 (선택 사항)
+    if not results:
+        message_body = "⚠️ 데이터를 가져오는 데 실패했습니다."
+    else:
+        msg_lines = []
+        for res in results:
+            emoji = "🥇" if res['rank'] == 1 else "🥈" if res['rank'] == 2 else "🥉" if res['rank'] == 3 else "🔹"
+            msg_lines.append(f"{emoji} **{res['rank']}위**: {res['sign']}")
+        message_body = "\n".join(msg_lines)
+    
+    full_message = f"{title}\n\n{message_body}"
+    
+    if not webhook_url:
+        print(full_message)
+        return
+
     payload = {
         "username": "아침별점 요정",
-        "avatar_url": "https://pbs.twimg.com/card_img/2031288293040525312/XqIwveUV?format=jpg&name=360x360",
-        "content": message
+        "avatar_url": "https://www.asahi.co.jp/common/images/abc_logo.png",
+        "content": full_message
     }
     requests.post(webhook_url, json=payload)
 
 if __name__ == "__main__":
-    result_message = get_ohaasa_ranking()
-    send_discord(result_message)
+    # 한국 시간(KST) 기준 요일 계산
+    tz_kst = pytz.timezone('Asia/Seoul')
+    now_kst = datetime.now(tz_kst)
+    weekday = now_kst.weekday() # 0:월 ~ 6:일
+
+    with sync_playwright() as p:
+        # 일반 브라우저처럼 보이게 하기 위한 헤더 설정
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.34 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.34"
+        )
+        page = context.new_page()
+        
+        try:
+            if weekday < 5: # 월~금 (평일)
+                title, results = get_weekday_ranking(page)
+            else: # 토~일 (주말)
+                title, results = get_weekend_ranking(page)
+            
+            send_discord(title, results)
+        except Exception as e:
+            print(f"❌ 실행 중 오류 발생: {e}")
+        finally:
+            browser.close()

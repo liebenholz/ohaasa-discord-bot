@@ -20,7 +20,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install playwright beautifulsoup4 requests
+          pip install playwright beautifulsoup4 requests pytz
           
       - name: Install Playwright Browsers
         run: |
