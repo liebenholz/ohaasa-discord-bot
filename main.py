@@ -3,124 +3,105 @@ from bs4 import BeautifulSoup
 import requests
 import os
 from datetime import datetime
-import pytz
 
-# 별자리 영문-한글 or 일본어-한글 매핑 테이블
-WEEKDAY_SIGN_MAP = {
-    "aries": "양자리", "taurus": "황소자리", "gemini": "쌍둥이자리",
-    "cancer": "게자리", "leo": "사자자리", "virgo": "처녀자리",
-    "libra": "천칭자리", "scorpio": "전갈자리", "sagittarius": "사수자리",
-    "capricorn": "염소자리", "aquarius": "물병자리", "pisces": "물고기자리"
+# 매핑 데이터 관리 (별도의 데이터 구조로 분리)
+SIGN_CONFIG = {
+    "weekday": {
+        "url": "https://www.asahi.co.jp/ohaasa/week/horoscope/",
+        "selector": "ul.oa_horoscope_list li",
+        "map": {
+            "aries": "양자리", "taurus": "황소자리", "gemini": "쌍둥이자리",
+            "cancer": "게자리", "leo": "사자자리", "virgo": "처녀자리",
+            "libra": "천칭자리", "scorpio": "전갈자리", "sagittarius": "사수자리",
+            "capricorn": "염소자리", "aquarius": "물병자리", "pisces": "물고기자리"
+        }
+    },
+    "weekend": {
+        "url": "https://www.tv-asahi.co.jp/goodmorning/uranai/",
+        "selector": ".rank-box li",
+        "map": {
+            "ohitsuji": "양자리", "ousi": "황소자리", "futago": "쌍둥이자리",
+            "kani": "게자리", "sisi": "사자자리", "otome": "처녀자리",
+            "tenbin": "천칭자리", "sasori": "전갈자리", "ite": "사수자리",
+            "yagi": "염소자리", "mizugame": "물병자리", "uo": "물고기자리"
+        }
+    }
 }
 
-# 주말 사이트 전용 data-label 매핑 테이블
-WEEKEND_SIGN_MAP = {
-        "ohitsuji": "양자리", "ousi": "황소자리", "futago": "쌍둥이자리",
-        "kani": "게자리", "sisi": "사자자리", "otome": "처녀자리",
-        "tenbin": "천칭자리", "sasori": "전갈자리", "ite": "사수자리",
-        "yagi": "염소자리", "mizugame": "물병자리", "uo": "물고기자리"
-    }
-
-def get_weekday_ranking():
-    url = "https://www.asahi.co.jp/ohaasa/week/horoscope/"
-    
-    try:
-        with sync_playwright() as p:
-            # GitHub Actions 서버 환경을 위한 브라우저 설정
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            
-            page.goto(url)
-            # 서버 환경을 고려해 15초로 여유 있게 설정
-            page.wait_for_selector('ul.oa_horoscope_list li', timeout=15000)
-            
-            html = page.content()
+# 브라우저 제어 로직
+def fetch_html(url, selector, timeout=20000):
+    """Playwright를 사용하여 HTML 소스를 가져오는 단일 함수"""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(user_agent="Mozilla/5.0")
+        page = context.new_page()
+        try:
+            # 주말 사이트의 'networkidle' 이슈를 고려하여 domcontentloaded 사용
+            page.goto(url, wait_until="domcontentloaded", timeout=40000)
+            page.wait_for_selector(selector, timeout=timeout)
+            return page.content()
+        finally:
             browser.close()
 
-        soup = BeautifulSoup(html, 'html.parser')
-        horoscope_ul = soup.select_one('ul.oa_horoscope_list')
-        
-        if not horoscope_ul:
-            return "❌ 데이터를 찾지 못했습니다. 사이트 구조가 변경되었을 수 있습니다."
+# 데이터 파싱 로직
+def parse_horoscope_data(html, mode):
+    """HTML에서 별자리 키워드를 추출하는 로직"""
+    soup = BeautifulSoup(html, 'html.parser')
+    config = SIGN_CONFIG[mode]
+    results = []
 
-        items = horoscope_ul.select('li')
-        msg_lines = ["✨ **오늘의 오하아사 별자리 순위** ✨\n"]
-        
-        for index, item in enumerate(items, start=1):
+    if mode == "weekday":
+        items = soup.select(config["selector"])
+        for item in items:
             classes = item.get('class', [])
-            english_sign = next((c for c in classes if c in WEEKDAY_SIGN_MAP), "unknown")
-            korean_sign = WEEKDAY_SIGN_MAP.get(english_sign, english_sign)
-            
-            # 4위부터 12위까지도 정상적으로 순위가 매겨지도록 index 활용
-            rank_val = index
-            rank_text = f"{rank_val}위"
-            
-            if rank_val == 1: emoji = "🥇"
-            elif rank_val == 2: emoji = "🥈"
-            elif rank_val == 3: emoji = "🥉"
-            else: emoji = "🔹"
-            
-            msg_lines.append(f"{emoji} **{rank_text}**: {korean_sign}")
-            
-        return "\n".join(msg_lines)
-
-    except Exception as e:
-        return f"❌ 크롤링 중 에러 발생: {e}"
+            sign_key = next((c for c in classes if c in config["map"]), "unknown")
+            results.append(sign_key)
+    else:
+        # 주말 사이트는 a 태그의 data-label 사용
+        items = soup.select(f"{config['selector']} a")
+        for item in items:
+            sign_key = item.get('data-label', '').strip().lower()
+            results.append(sign_key)
     
+    return results
 
-def get_weekend_ranking():
-    url = "https://www.tv-asahi.co.jp/goodmorning/uranai/"
+# 메시지 구성 로직(인터페이스 통일)
+def format_message(sign_keys, mode):
+    """추출된 키를 한글 메시지로 변환"""
+    if not sign_keys:
+        return "❌ 데이터를 찾지 못했습니다. 사이트 구조가 변경되었을 수 있습니다."
+
+    config = SIGN_CONFIG[mode]
+    msg_lines = ["✨ **오늘의 오하아사 별자리 순위** ✨\n"]
     
+    for rank, key in enumerate(sign_keys, start=1):
+        korean_sign = config["map"].get(key, f"알 수 없음({key})")
+        
+        if rank == 1: emoji = "🥇"
+        elif rank == 2: emoji = "🥈"
+        elif rank == 3: emoji = "🥉"
+        else: emoji = "🔹"
+        
+        msg_lines.append(f"{emoji} **{rank}위**: {korean_sign}")
+    
+    return "\n".join(msg_lines)
+
+# 실행 메인 함수
+def get_horoscope_ranking(mode):
     try:
-        with sync_playwright() as p:
-            # GitHub Actions 및 로컬 환경을 위한 브라우저 설정
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            
-            page.goto(url, wait_until="networkidle", timeout=60000)
-            # 이미지에서 확인한 rank-box 내부의 li 태그가 나타날 때까지 대기
-            page.wait_for_selector('.rank-box li', timeout=20000)
-
-            html = page.content()
-            browser.close()
-
-        soup = BeautifulSoup(html, 'html.parser')
-        rank_items = soup.select('.rank-box li a')
-        
-        if not rank_items:
-            return "❌ 데이터를 찾지 못했습니다. 사이트 구조가 변경되었을 수 있습니다."
-
-        msg_lines = ["✨ **오늘의 오하아사 별자리 순위** ✨\n"]
-        
-        for index, item in enumerate(rank_items, start=1):
-            # <a> 태그의 data-label 속성값 가져오기 (예: sisi, ite...)
-            label = item.get('data-label', '').strip().lower()
-            
-            # 주말 전용 매핑 테이블에서 한글 이름 찾기
-            korean_sign = WEEKEND_SIGN_MAP.get(label, f"알 수 없음({label})")
-            
-            rank_val = index
-            if rank_val == 1: emoji = "🥇"
-            elif rank_val == 2: emoji = "🥈"
-            elif rank_val == 3: emoji = "🥉"
-            else: emoji = "🔹"
-            
-            msg_lines.append(f"{emoji} **{rank_val}위**: {korean_sign}")
-            
-        return "\n".join(msg_lines)
-
+        config = SIGN_CONFIG[mode]
+        html = fetch_html(config["url"], config["selector"])
+        sign_keys = parse_horoscope_data(html, mode)
+        return format_message(sign_keys, mode)
     except Exception as e:
-        return f"❌ 크롤링 중 에러 발생: {e}"
-        
+        return f"❌ 크롤링 중 에러 발생 ({mode}): {e}"
 
 def send_discord(message):
     webhook_url = os.environ.get('DISCORD_WEBHOOK')
     if not webhook_url:
-        print("Webhook URL이 설정되지 않았습니다. 결과만 출력합니다.")
         print(message)
         return
     
-    # 디스코드 봇 프로필 설정 (선택 사항)
     payload = {
         "username": "아침별점 요정",
         "avatar_url": "https://pbs.twimg.com/card_img/2031288293040525312/XqIwveUV?format=jpg&name=360x360",
@@ -129,13 +110,8 @@ def send_discord(message):
     requests.post(webhook_url, json=payload)
 
 if __name__ == "__main__":
-
-    now = datetime.now()
-    weekday = now.weekday() # 0:월 ~ 4:금, 5:토, 6:일
-
-    if weekday < 5:
-        result_message = get_weekday_ranking()
-    else:
-        result_message = get_weekend_ranking()
-
+    weekday = datetime.now().weekday()
+    mode = "weekday" if weekday < 5 else "weekend"
+    
+    result_message = get_horoscope_ranking(mode)
     send_discord(result_message)
