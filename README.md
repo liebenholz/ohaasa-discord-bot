@@ -1,7 +1,7 @@
-# ohaasa-discord-bot
+# 아침별점 일일 알림
 
 ## 설명
-오하아사 순위를 아침마다 알려주는 디스코드 봇입니다.
+오하아사 순위를 아침마다 알려주는 Webhook 기반 단방향 알림형 봇입니다.
 - 특정 시간에 아사히 아침별점(おは朝星占い) 홈페이지를 크롤링하여 메세지를 전달합니다.
   - 평일 : https://www.asahi.co.jp/ohaasa/week/horoscope/
   - 주말 : https://www.tv-asahi.co.jp/goodmorning/uranai/
