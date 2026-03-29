@@ -106,8 +106,9 @@ def get_date():
     
     return formatted_date
 
-def send_discord(message):
+def send_discord(message, mode):
     webhook_url = os.environ.get('DISCORD_WEBHOOK')
+    config = SIGN_CONFIG[mode]
     
     if not webhook_url:
         print(message)
@@ -130,10 +131,11 @@ def send_discord(message):
     }
     requests.post(webhook_url, json=payload)
 
-    
+
 if __name__ == "__main__":
     weekday = datetime.now().weekday()
     mode = "weekend" if weekday in [4, 5] else "weekday"
     
     result_message = get_horoscope_ranking(mode)
     send_discord(result_message, mode)
+    
